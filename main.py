@@ -6,29 +6,39 @@ from datetime import datetime
 import tkinter.messagebox as messagebox
 import os
 import sys
-# --- CONFIGURAÇÃO DOS CAMINHOS ---
+
+# --- CONFIGURAÇÃO ROBUSTA DE CAMINHOS (LINUX/WINDOWS/EXE) ---
 def obter_caminho_recurso(nome_arquivo):
     """
-    Se for a CHAVE (JSON), busca dentro do EXE (recurso fixo).
-    Se for a PLANILHA (Excel), busca na PASTA do usuário (recurso editável).
+    Retorna o caminho correto se estiver rodando como script (.py)
+    ou como executável (.exe) gerado pelo PyInstaller.
     """
-    if nome_arquivo.endswith(".json"):
-        try:
+    if getattr(sys, 'frozen', False):
+        # Se for o JSON da chave, ele está embutido no arquivo temporário do EXE
+        if nome_arquivo.endswith(".json"):
             base_path = sys._MEIPASS
-        except Exception:
-            base_path = os.path.abspath(".")
-        return os.path.join(base_path, nome_arquivo)
+        else:
+            # Se for a planilha, ela deve estar na mesma pasta do executável final
+            base_path = os.path.dirname(sys.executable)
     else:
-        # Busca o Excel na mesma pasta onde o .exe está rodando
-        return os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else "."), nome_arquivo)
+        # Caminho de desenvolvimento (rodando direto no terminal/VS Code)
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
-# A Chave fica 'embutida' (segurança), a Planilha fica 'fora' (edição)
+    return os.path.join(base_path, nome_arquivo)
+
+# Definição dos caminhos dos arquivos
 CAMINHO_CHAVE = obter_caminho_recurso("chave-firebase.json")
-PLANILHA_INTERNA = obter_caminho_recurso("precos_internos.xlsx")
-if not firebase_admin._apps:
-    cred = credentials.Certificate(CAMINHO_CHAVE)
-    firebase_admin.initialize_app(cred, {'databaseURL': 'https://pricing-ed61c-default-rtdb.firebaseio.com'})
+PLANILHA_INTERNA = obter_caminho_recurso("precos_internos.xlsm")
 
+# Inicialização do Firebase (apenas se não houver apps ativos)
+if not firebase_admin._apps:
+    try:
+        cred = credentials.Certificate(CAMINHO_CHAVE)
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': 'https://pricing-ed61c-default-rtdb.firebaseio.com'
+        })
+    except Exception as e:
+        print(f"Erro ao iniciar Firebase: {e}")
 
 class DashboardPricing(ctk.CTk):
     def __init__(self):
@@ -65,7 +75,7 @@ class DashboardPricing(ctk.CTk):
         self.entry_busca.grid(row=0, column=1, padx=5)
         self.entry_busca.bind("<KeyRelease>", lambda e: self.exibir_dados())
 
-        # BOTÕES DE AÇÃO (Exportar e Atualizar)
+        # BOTÕES DE AÇÃO
         self.btn_export = ctk.CTkButton(self.header, text="EXPORTAR EXCEL", fg_color=self.cor_laranja,
                                         command=self.exportar_excel, width=140, font=("Arial", 12, "bold"))
         self.btn_export.pack(side="right", padx=20)
@@ -81,6 +91,10 @@ class DashboardPricing(ctk.CTk):
 
     def carregar_planilha_interna(self):
         try:
+            if not os.path.exists(PLANILHA_INTERNA):
+                print(f"Planilha não encontrada em: {PLANILHA_INTERNA}")
+                return
+
             df = pd.read_excel(PLANILHA_INTERNA, sheet_name='Pricing', skiprows=3)
             df.columns = [str(c).strip() for c in df.columns]
 
@@ -100,7 +114,7 @@ class DashboardPricing(ctk.CTk):
                     except:
                         continue
         except Exception as e:
-            print(f"Erro planilha: {e}")
+            print(f"Erro na leitura da planilha: {e}")
 
     def carregar_dados(self):
         try:
@@ -169,13 +183,11 @@ class DashboardPricing(ctk.CTk):
                 row_idx += 1
 
     def exportar_excel(self):
-        """Exporta os dados filtrados ou todos para o Excel"""
         try:
             if not self.dados_calculados:
                 messagebox.showwarning("Aviso", "Não há dados para exportar!")
                 return
 
-            # Filtra os dados de acordo com a busca e comprador atual antes de exportar
             busca = self.entry_busca.get().upper().strip()
             f_comp = self.combo_comprador.get()
 
@@ -186,20 +198,21 @@ class DashboardPricing(ctk.CTk):
             ]
 
             df_export = pd.DataFrame(dados_para_exportar)
-
-            # Nome do arquivo com data e hora
             timestamp = datetime.now().strftime("%d_%m_%Y_%H%M")
             nome_arquivo = f"Relatorio_Combate_{timestamp}.xlsx"
 
             df_export.to_excel(nome_arquivo, index=False)
-            messagebox.showinfo("Sucesso", f"Relatório exportado com sucesso!\nSalvo como: {nome_arquivo}")
+            messagebox.showinfo("Sucesso", f"Salvo como: {nome_arquivo}")
 
-            # Tenta abrir a pasta onde o arquivo foi salvo (Linux/Mint)
-            os.system(f'xdg-open .')
+            # Comando compatível com Windows e Linux para abrir a pasta
+            caminho_pasta = os.path.abspath(".")
+            if sys.platform == "win32":
+                os.startfile(caminho_pasta)
+            else:
+                os.system(f'xdg-open "{caminho_pasta}"')
 
         except Exception as e:
             messagebox.showerror("Erro na Exportação", f"Não foi possível exportar: {e}")
-
 
 if __name__ == "__main__":
     app = DashboardPricing()
